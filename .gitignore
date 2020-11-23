@@ -1,0 +1,6 @@
+/out/
+/build/
+.vs/
+.vscode/
+CMakeSettings.json
+test.cpp

@@ -1,0 +1,17 @@
+BasedOnStyle: Google
+
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<[^/]+>'
+    Priority: 1
+  - Regex: '^<(clang|llvm)'
+    Priority: 2
+  - Regex: '^<(spdlog|fmt|gsl)'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 5
+PointerAlignment: Left
+DerivePointerAlignment: false
+ContinuationIndentWidth: 2
