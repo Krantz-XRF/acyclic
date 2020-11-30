@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string_view>
 
 #include <clang/ASTMatchers/ASTMatchFinder.h>
@@ -14,7 +15,10 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <gsl/gsl_assert>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
+
+#include "ref_graph.h"
 
 namespace tool = clang::tooling;
 
@@ -28,46 +32,47 @@ struct fmt::formatter<llvm::StringRef> : formatter<std::string_view> {
 };
 
 namespace {
-llvm::cl::OptionCategory category{"acyclic"};
+namespace cl = llvm::cl;
+
+cl::OptionCategory category{"acyclic"};
+
+cl::opt<std::string> verbose{
+  "verbose", cl::cat{category}, cl::init("info"), cl::value_desc{"level"},
+  cl::desc{"Verbosity: [trace, debug, info, warning, error, critical, off]"}};
+
+std::optional<spdlog::level::level_enum> parse_verbosity(std::string_view s) {
+  static constexpr std::array levels = SPDLOG_LEVEL_NAMES;
+  const auto p = std::find(begin(levels), end(levels), s);
+  if (p == end(levels)) return std::nullopt;
+  return static_cast<spdlog::level::level_enum>(p - begin(levels));
+}
 
 inline std::string className(clang::QualType t) {
   auto record = t.getTypePtr()->getAs<clang::RecordType>();
-  return fmt::format(
-    fmt::fg(fmt::terminal_color::green), "{}",
-    record ? record->getDecl()->getName().str() : t.getAsString());
+  return record ? record->getDecl()->getName().str() : t.getAsString();
 }
 
 inline std::string varName(const clang::NamedDecl& d) {
-  return fmt::format(fmt::fg(fmt::terminal_color::cyan), "{}", d.getName());
+  return d.getName().str();
 }
 
 inline std::string funcName(const clang::FunctionDecl& d) {
-  return fmt::format(fmt::fg(fmt::terminal_color::bright_cyan), "{}",
-                     d.getName());
+  return d.getName().str();
 }
 
-struct SourceLoc {
-  std::filesystem::path file;
-  size_t line;
-  size_t column;
+inline std::string classNameC(clang::QualType t) {
+  return fmt::format(fmt::fg(fmt::terminal_color::green), "{}", className(t));
+}
 
-  static SourceLoc from(const clang::SourceLocation& loc,
-                        const clang::SourceManager& sm) {
-    auto file = std::filesystem::path{sm.getFilename(loc).str()};
-    return {std::filesystem::relative(file), sm.getSpellingLineNumber(loc),
-            sm.getSpellingColumnNumber(loc)};
-  }
-};
+inline std::string varNameC(const clang::NamedDecl& d) {
+  return fmt::format(fmt::fg(fmt::terminal_color::cyan), "{}", varName(d));
+}
+
+inline std::string funcNameC(const clang::FunctionDecl& d) {
+  return fmt::format(fmt::fg(fmt::terminal_color::bright_cyan), "{}",
+                     funcName(d));
+}
 }  // namespace
-
-template <>
-struct fmt::formatter<SourceLoc> : formatter<std::string> {
-  template <typename FormatContext>
-  auto format(const SourceLoc& s, FormatContext& ctx) {
-    auto r = fmt::format("{}:{}:{}", s.file.string(), s.line, s.column);
-    return formatter<std::string>::format(r, ctx);
-  }
-};
 
 namespace ast {
 using namespace clang::ast_matchers;
@@ -110,11 +115,17 @@ class MemberAccessHandler : public MatchFinder::MatchCallback {
       if (const auto pointer = parentType.getTypePtr()->getAs<PointerType>())
         parentType = pointer->getPointeeType();
 
-    fmt::print("{}: function {} referenced {} as {}::{}.\n",
-               SourceLoc::from(function->getLocation(), *sm),
-               funcName(*function), className(memberType),
-               className(parentType), varName(*member));
+    spdlog::debug("{}: function {} referenced {} as {}::{}.",
+                  SourceLoc::from(function->getLocation(), *sm),
+                  funcNameC(*function), classNameC(memberType),
+                  classNameC(parentType), varNameC(*member));
+
+    add_to(graph, classNameC(parentType), classNameC(memberType),
+           varNameC(*member), funcNameC(*function),
+           SourceLoc::from(function->getLocation(), *sm));
   }
+
+  ref_graph graph;
 };
 }  // namespace ast
 
@@ -122,9 +133,16 @@ int main(int argc, const char* argv[]) {
   tool::CommonOptionsParser options{argc, argv, category};
   tool::ClangTool tool{options.getCompilations(), options.getSourcePathList()};
 
+  set_default_logger(spdlog::stderr_color_st("acyclic"));
+  spdlog::set_pattern("%n: %^%l:%$ %v");
+  if (const auto v = parse_verbosity(verbose)) spdlog::set_level(*v);
+
   ast::MemberAccessHandler handler;
   ast::MatchFinder finder;
   finder.addMatcher(ast::memberAccess, &handler);
 
-  return tool.run(tool::newFrontendActionFactory(&finder).get());
+  auto err = tool.run(tool::newFrontendActionFactory(&finder).get());
+  if (err) return err;
+
+  detect_cyclic_ref(handler.graph);
 }

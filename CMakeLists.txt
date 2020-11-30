@@ -21,7 +21,7 @@ set(GSL_CXX_STANDARD 17)
 find_package(Microsoft.GSL CONFIG REQUIRED)
 
 add_executable(acyclic)
-target_sources(acyclic PRIVATE acyclic.cpp)
+target_sources(acyclic PRIVATE "acyclic.cpp" "ref_graph.h" "ref_graph.cpp" "comparator.h")
 target_compile_features(acyclic PRIVATE cxx_std_17)
 target_include_directories(acyclic SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_directories(acyclic PRIVATE ${LLVM_LIBRARY_DIRS})
